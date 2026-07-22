@@ -1,0 +1,181 @@
+# =============================================================================
+# REFERENCE MANIFEST — NOT the source of truth.
+#
+# The AWS CDK application (see lib/constructs/vllm-workload.ts) is what actually
+# applies the vLLM ServiceAccount, Service, and Deployment at deploy time. This
+# file mirrors those objects for readability and review.
+#
+# kubectl apply these only for local/kind experimentation or inspection; in AWS
+# they are applied by CDK.
+#
+# vLLM is a PRIVATE inference server:
+#   - ClusterIP only (never public: no Ingress, no LoadBalancer, no public IP),
+#   - runs exclusively on the tainted GPU node group (nodeSelector + toleration),
+#   - 1 replica, Recreate strategy (a single GPU cannot host two model copies),
+#   - internal URL: http://vllm.llama-pilot.svc.cluster.local:8000
+#
+# Placeholders to substitute for a local run:
+#   $(MODEL_ID)  e.g. meta-llama/Llama-3.2-3B-Instruct
+#   image tag    vllm/vllm-openai:v0.6.6 (pinned below)
+# =============================================================================
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: vllm
+  namespace: llama-pilot
+  # No IRSA/Pod-Identity annotation: vLLM needs no AWS permissions.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm
+  namespace: llama-pilot
+  labels:
+    app: vllm
+    app.kubernetes.io/part-of: llama-pilot
+spec:
+  type: ClusterIP
+  selector:
+    app: vllm
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm
+  namespace: llama-pilot
+  labels:
+    app: vllm
+    app.kubernetes.io/part-of: llama-pilot
+spec:
+  replicas: 1
+  # Recreate: the old pod must release the GPU before the new one can bind it.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: vllm
+  template:
+    metadata:
+      labels:
+        app: vllm
+        app.kubernetes.io/part-of: llama-pilot
+    spec:
+      serviceAccountName: vllm
+      # Schedule onto GPU nodes only.
+      nodeSelector:
+        workload-type: inference
+      tolerations:
+        - key: dedicated
+          operator: Equal
+          value: inference
+          effect: NoSchedule
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      securityContext:
+        # vLLM/CUDA runtime typically needs root inside the container, so this
+        # pod does NOT satisfy the "restricted" PSS — it relies on the tainted,
+        # dedicated GPU node group for isolation instead.
+        runAsNonRoot: false
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: vllm
+          image: vllm/vllm-openai:v0.6.6
+          imagePullPolicy: IfNotPresent
+          # $(MODEL_ID) is the Hugging Face model repo id, e.g.
+          # meta-llama/Llama-3.2-3B-Instruct. In CDK this is config.modelId.
+          command: ["vllm", "serve", "$(MODEL_ID)"]
+          args:
+            - "--served-model-name"
+            - "llama-pilot"
+            - "--host"
+            - "0.0.0.0"
+            - "--port"
+            - "8000"
+            - "--dtype"
+            - "auto"
+            - "--max-model-len"
+            - "4096"
+            - "--gpu-memory-utilization"
+            - "0.85"
+            - "--max-num-seqs"
+            - "4"
+            - "--enable-prefix-caching"
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: MODEL_ID
+              value: "meta-llama/Llama-3.2-3B-Instruct"
+            - name: HOME
+              value: /home/vllm
+            - name: HF_HOME
+              value: /models
+            # Hugging Face token from the out-of-band Secret. optional:true so the
+            # pod still starts for public models when the Secret is absent.
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: huggingface-token
+                  key: token
+                  optional: true
+          resources:
+            limits:
+              nvidia.com/gpu: "1"
+            requests:
+              cpu: "2"
+              memory: 8Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+          volumeMounts:
+            - name: model-cache
+              mountPath: /models
+            - name: dshm
+              mountPath: /dev/shm
+            - name: home
+              mountPath: /home/vllm
+          # Long startup allowance for model download + weight load (~20 min).
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 15
+            failureThreshold: 80
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 6
+      volumes:
+        # Ephemeral model cache (weights are re-downloaded on reschedule).
+        - name: model-cache
+          emptyDir:
+            sizeLimit: 100Gi
+        # Shared memory for vLLM/NCCL — must be larger than the default 64Mi.
+        - name: dshm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 4Gi
+        - name: home
+          emptyDir: {}

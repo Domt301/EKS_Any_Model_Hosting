@@ -1,0 +1,35 @@
+# =============================================================================
+# REFERENCE MANIFEST — NOT the source of truth.
+#
+# The AWS CDK application (see lib/stacks/workload-stack.ts) is what actually
+# applies this TargetGroupBinding at deploy time, wiring the FastAPI Service to
+# the CDK-created internal ALB target group. This file mirrors that object for
+# readability and review.
+#
+# kubectl apply these only for local/kind experimentation or inspection; in AWS
+# they are applied by CDK. (This CRD requires the AWS Load Balancer Controller
+# and a real ALB target group — it does nothing on a local/kind cluster.)
+#
+# The TargetGroupBinding CRD is provided by the AWS Load Balancer Controller.
+# It registers the FastAPI Service's pod IPs (targetType: ip) as targets of the
+# pre-existing ALB target group identified by <TARGET_GROUP_ARN>.
+#
+# Placeholder to substitute:
+#   <TARGET_GROUP_ARN>   the ARN of the CDK-created FastAPI target group, e.g.
+#                        arn:aws:elasticloadbalancing:<region>:<acct>:targetgroup/
+#                        llama-pilot-dev-api-tg/<id>
+# =============================================================================
+---
+apiVersion: elbv2.k8s.aws/v1beta1
+kind: TargetGroupBinding
+metadata:
+  name: fastapi
+  namespace: llama-pilot
+spec:
+  # Bind to the FastAPI Service on its service port (80). The controller resolves
+  # this to the pod IPs behind the Service.
+  serviceRef:
+    name: fastapi
+    port: 80
+  targetGroupARN: <TARGET_GROUP_ARN>
+  targetType: ip

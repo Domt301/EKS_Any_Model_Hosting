@@ -1,0 +1,72 @@
+# Deploy the full CDK stage (network, auth, containers, EKS + workloads, Amplify).
+#
+# Manual only (workflow_dispatch): infrastructure changes are high-impact and
+# expensive (GPU node group, always-on EKS control plane), so this never fires
+# on push. It builds and tests the CDK app, then `cdk deploy --all`.
+#
+# Auth: OIDC role assumption (no long-lived keys).
+name: deploy-infrastructure
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment (context selector)."
+        type: string
+        default: dev
+      apiImageTag:
+        description: >-
+          FastAPI image tag to deploy (the git SHA from build-api). Defaults to
+          'latest' only as a fallback — prefer an explicit immutable SHA.
+        type: string
+        default: latest
+
+# Required for OIDC federation with AWS.
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: CDK deploy
+        # -c apiImageTag=<sha> pins the FastAPI image the workload deploys.
+        # The environment is selected via the `environment` context key.
+        run: >-
+          npx cdk deploy --all
+          --require-approval never
+          -c environment=${{ inputs.environment }}
+          -c apiImageTag=${{ inputs.apiImageTag }}
+
+      # NOTE: Two-phase Amplify callback update.
+      # On a first-ever deploy the real Amplify branch URL is not yet known, so
+      # the Cognito callback/logout allow-list and the SPA's redirect origin are
+      # seeded from cdk.json defaults. After Amplify exists, its branch URL must
+      # be fed back in (Cognito allowed callback URLs + FastAPI CORS origin) and
+      # this workflow re-run so the values converge. See the repo README
+      # "Amplify callback workflow" / ADR for the exact procedure.
