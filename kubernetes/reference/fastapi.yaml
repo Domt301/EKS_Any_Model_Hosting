@@ -1,0 +1,177 @@
+# =============================================================================
+# REFERENCE MANIFEST — NOT the source of truth.
+#
+# The AWS CDK application (see lib/constructs/fastapi-workload.ts) is what
+# actually applies the FastAPI ConfigMap, ServiceAccount, Service, and
+# Deployment at deploy time. This file mirrors those objects for readability
+# and review.
+#
+# kubectl apply these only for local/kind experimentation or inspection; in AWS
+# they are applied by CDK.
+#
+# FastAPI is the application boundary (the API surface):
+#   - 2 replicas on the general (CPU) node group, preferred pod anti-affinity,
+#   - restricted securityContext (non-root, read-only root fs, all caps dropped),
+#   - ClusterIP :80 -> container :8080; exposed publicly only via the internal
+#     ALB + API Gateway, never directly (see reference/target-group-binding.yaml),
+#   - configuration comes from the fastapi-config ConfigMap (not baked in image),
+#   - the ServiceAccount has NO AWS permissions.
+#
+# Placeholders to substitute for a local run:
+#   <ECR_REPO_URI>:<tag>    the FastAPI image, e.g. <acct>.dkr.ecr.<region>
+#                           .amazonaws.com/llama-pilot-dev-api:<git-sha>
+#   COGNITO_* values        the real Cognito user pool details from CDK outputs
+# =============================================================================
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fastapi-config
+  namespace: llama-pilot
+data:
+  # Non-secret application configuration. Consumed via envFrom in the Deployment.
+  SYSTEM_PROMPT: >-
+    You are a helpful, concise assistant hosted for an internal pilot. Answer
+    clearly and refuse unsafe requests.
+  # --- Cognito (JWT validation) — replace with real values from CDK outputs. ---
+  COGNITO_REGION: "<COGNITO_REGION>"
+  COGNITO_USER_POOL_ID: "<COGNITO_USER_POOL_ID>"
+  COGNITO_APP_CLIENT_ID: "<COGNITO_APP_CLIENT_ID>"
+  COGNITO_ISSUER: "<COGNITO_ISSUER>"
+  COGNITO_JWKS_URL: "<COGNITO_JWKS_URL>"
+  # --- Inference backend (private vLLM ClusterIP). ---
+  VLLM_BASE_URL: "http://vllm.llama-pilot.svc.cluster.local:8000"
+  SERVED_MODEL_NAME: "llama-pilot"
+  MAX_MODEL_LENGTH: "4096"
+  MAX_OUTPUT_TOKENS: "512"
+  MAX_CONCURRENT_INFERENCE: "4"
+  REQUEST_TIMEOUT_SECONDS: "120"
+  GENERATION_TIMEOUT_SECONDS: "300"
+  LOG_LEVEL: "INFO"
+  # Never log prompt/response bodies in the pilot.
+  LOG_PROMPTS: "false"
+  # CORS allow-list (defence-in-depth with API Gateway) — the SPA origin.
+  CORS_ALLOW_ORIGINS: "<SPA_ORIGIN>"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: fastapi
+  namespace: llama-pilot
+  # No IRSA/Pod-Identity annotation: FastAPI needs no AWS permissions.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: fastapi
+  namespace: llama-pilot
+  labels:
+    app: fastapi
+    app.kubernetes.io/part-of: llama-pilot
+spec:
+  type: ClusterIP
+  selector:
+    app: fastapi
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+      protocol: TCP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fastapi
+  namespace: llama-pilot
+  labels:
+    app: fastapi
+    app.kubernetes.io/part-of: llama-pilot
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: fastapi
+  template:
+    metadata:
+      labels:
+        app: fastapi
+        app.kubernetes.io/part-of: llama-pilot
+    spec:
+      serviceAccountName: fastapi
+      nodeSelector:
+        workload-type: general
+      terminationGracePeriodSeconds: 30
+      # Spread the two replicas across nodes when possible.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: fastapi
+                topologyKey: kubernetes.io/hostname
+      # Pod-level restricted security context.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: fastapi
+          image: <ECR_REPO_URI>:<tag>
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: fastapi-config
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+          # Container-level restricted security context.
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          # Read-only root fs: only /tmp is writable (emptyDir below).
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+          startupProbe:
+            httpGet:
+              path: /health/live
+              port: 8080
+            periodSeconds: 3
+            failureThreshold: 20
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: 8080
+            periodSeconds: 15
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8080
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+      volumes:
+        - name: tmp
+          emptyDir: {}

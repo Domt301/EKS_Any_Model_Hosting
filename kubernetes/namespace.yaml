@@ -1,0 +1,34 @@
+# =============================================================================
+# REFERENCE MANIFEST — NOT the source of truth.
+#
+# The AWS CDK application (see lib/stacks/eks-stack.ts) is what actually applies
+# these namespaces to the cluster at deploy time. This file is a hand-maintained
+# mirror of that manifest for readability and review.
+#
+# kubectl apply these only for local/kind experimentation or inspection; in AWS
+# they are applied by CDK. Do not `kubectl apply` this against the real EKS
+# cluster — CDK owns those objects and will fight you.
+# =============================================================================
+---
+# Application namespace for the FastAPI + vLLM workloads.
+# Enforces the "restricted" Pod Security Standard (warn + audit too), so every
+# pod must run non-root, drop capabilities, use a seccomp profile, etc.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: llama-pilot
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/warn: restricted
+    pod-security.kubernetes.io/audit: restricted
+    app.kubernetes.io/part-of: llama-pilot
+---
+# Observability namespace (metrics/logging tooling). Uses the more permissive
+# "baseline" standard because some agents need host access the app pods do not.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: observability
+  labels:
+    pod-security.kubernetes.io/enforce: baseline
+    app.kubernetes.io/part-of: llama-pilot

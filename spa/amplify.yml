@@ -1,0 +1,28 @@
+# AWS Amplify Hosting build spec for the Llama Pilot SPA.
+#
+# The SPA lives in the `spa/` subdirectory of the repository, so `appRoot: spa`
+# scopes all commands and the artifacts baseDirectory to that folder.
+#
+# NOTE: SPA client-side routing requires a 200 "rewrite" (not redirect) of
+#   /<*>  ->  /index.html
+# This rewrite rule is provisioned on the Amplify app by the CDK stack
+# (customRules), NOT in this build spec. Do not add it here.
+version: 1
+applications:
+  - appRoot: spa
+    frontend:
+      phases:
+        preBuild:
+          commands:
+            - npm ci
+        build:
+          commands:
+            - npm run build
+      artifacts:
+        # Relative to appRoot (spa/), so this resolves to spa/dist.
+        baseDirectory: dist
+        files:
+          - '**/*'
+      cache:
+        paths:
+          - node_modules/**/*

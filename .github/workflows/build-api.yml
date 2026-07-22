@@ -1,0 +1,85 @@
+# Build, test, and push the FastAPI application image to ECR.
+#
+# Pilot-grade CI: runs the pytest suite, then builds an immutable, SHA-tagged
+# image and pushes it to the environment's ECR repo (llama-pilot-<env>-api).
+# Never tags :latest — the ECR repo is IMMUTABLE and deploys pin a digest/SHA.
+#
+# Auth: OIDC role assumption (no long-lived keys). The role ARN and region come
+# from repo secrets/variables; nothing sensitive is hardcoded.
+name: build-api
+
+on:
+  push:
+    paths:
+      - "services/api/**"
+      - ".github/workflows/build-api.yml"
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment (selects the ECR repo suffix)."
+        type: string
+        default: dev
+
+# Required for OIDC federation with AWS.
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    env:
+      # Default to dev on push events; allow override via workflow_dispatch input.
+      ENVIRONMENT: ${{ inputs.environment || 'dev' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies (with dev extras)
+        working-directory: services/api
+        run: |
+          python -m pip install --upgrade pip
+          pip install ".[dev]"
+
+      - name: Run tests
+        working-directory: services/api
+        run: pytest
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build and push image (immutable SHA tag)
+        id: build
+        env:
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          # ECR repo name follows the CDK convention: llama-pilot-<env>-api.
+          REPOSITORY: llama-pilot-${{ env.ENVIRONMENT }}-api
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          IMAGE_URI="${REGISTRY}/${REPOSITORY}:${IMAGE_TAG}"
+          docker build -t "${IMAGE_URI}" services/api
+          docker push "${IMAGE_URI}"
+          echo "image_uri=${IMAGE_URI}" >> "$GITHUB_OUTPUT"
+          echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Summary
+        run: |
+          echo "Pushed: ${{ steps.build.outputs.image_uri }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Pass this tag to deploy-infrastructure as apiImageTag:" >> "$GITHUB_STEP_SUMMARY"
+          echo "  ${{ steps.build.outputs.image_tag }}" >> "$GITHUB_STEP_SUMMARY"
+
+    outputs:
+      image_tag: ${{ steps.build.outputs.image_tag }}
+      image_uri: ${{ steps.build.outputs.image_uri }}

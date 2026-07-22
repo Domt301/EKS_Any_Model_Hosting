@@ -1,0 +1,61 @@
+{
+  "app": "npx ts-node --prefer-ts-exts bin/app.ts",
+  "watch": {
+    "include": ["**"],
+    "exclude": [
+      "README.md",
+      "cdk*.json",
+      "**/*.d.ts",
+      "**/*.js",
+      "tsconfig.json",
+      "package*.json",
+      "yarn.lock",
+      "node_modules",
+      "test",
+      "services",
+      "spa"
+    ]
+  },
+  "context": {
+    "@aws-cdk/aws-lambda:recognizeLayerVersion": true,
+    "@aws-cdk/core:checkSecretUsage": true,
+    "@aws-cdk/core:target-partitions": ["aws", "aws-cn"],
+    "@aws-cdk-containers/ecs-service-extensions:enableDefaultLogDriver": true,
+    "@aws-cdk/aws-ec2:uniqueImdsv2TemplateName": true,
+    "@aws-cdk/aws-iam:minimizePolicies": true,
+    "@aws-cdk/core:validateSnapshotRemovalPolicy": true,
+    "@aws-cdk/aws-codepipeline:crossAccountKeyAliasStackSafeResourceName": true,
+    "@aws-cdk/aws-ec2:launchTemplateDefaultUserData": true,
+    "@aws-cdk/aws-ecs-patterns:removeDefaultDesiredCount": true,
+    "@aws-cdk/aws-rds:lowercaseDbIdentifier": true,
+    "@aws-cdk/aws-efs:defaultEncryptionAtRest": true,
+    "@aws-cdk/aws-lambda:recognizeVersionProps": true,
+    "@aws-cdk/aws-cloudfront:defaultSecurityPolicyTLSv1.2_2021": true,
+    "@aws-cdk/core:enablePartitionLiterals": true,
+    "@aws-cdk/core:newStyleStackSynthesis": true,
+    "llamaPilot": {
+      "environmentName": "dev",
+      "vpcCidr": "10.20.0.0/16",
+      "natGatewayCount": 1,
+      "kubernetesVersion": "1.31",
+      "cpuNodeInstanceTypes": ["m6i.large"],
+      "gpuNodeInstanceTypes": ["g5.xlarge"],
+      "modelId": "meta-llama/Llama-3.2-3B-Instruct",
+      "modelRevision": "0cb88a4f764b7a12671c53f0838cd831a0843b95",
+      "servedModelName": "llama-pilot",
+      "maxModelLength": 4096,
+      "maxOutputTokens": 512,
+      "gpuMemoryUtilization": 0.85,
+      "enableHuggingFaceTokenSecret": true,
+      "huggingFaceSecretName": "llama-pilot/dev/huggingface-token",
+      "cognitoCallbackUrls": ["http://localhost:5173/"],
+      "cognitoLogoutUrls": ["http://localhost:5173/"],
+      "deletionProtection": false,
+      "logRetentionDays": 14,
+      "clusterPublicAccessCidrs": [],
+      "vllmImage": "vllm/vllm-openai:v0.6.6",
+      "gpuNodeDiskSizeGiB": 200,
+      "cpuNodeDiskSizeGiB": 50
+    }
+  }
+}

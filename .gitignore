@@ -1,0 +1,41 @@
+# CDK / Node
+node_modules/
+cdk.out/
+dist/
+*.js
+!jest.config.js
+*.d.ts
+*.tsbuildinfo
+coverage/
+.cdk.staging/
+
+# Python (FastAPI service)
+services/api/.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+.mypy_cache/
+.ruff_cache/
+
+# SPA
+spa/node_modules/
+spa/dist/
+spa/.env
+spa/*.local
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+*.pem
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Deployment scratch
+outputs*.json
+!cdk.json

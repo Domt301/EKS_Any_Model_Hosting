@@ -1,0 +1,131 @@
+# =============================================================================
+# REFERENCE MANIFEST — NOT the source of truth.
+#
+# The AWS CDK application (see lib/stacks/workload-stack.ts, applyNetworkPolicies)
+# is what actually applies these NetworkPolicies at deploy time. This file mirrors
+# them for readability and review.
+#
+# kubectl apply these only for local/kind experimentation or inspection; in AWS
+# they are applied by CDK.
+#
+# Enforcement note: on EKS these are enforced by the Amazon VPC CNI network-policy
+# agent (VPC CNI enforced). A cluster without a NetworkPolicy-capable CNI will
+# accept these objects but silently NOT enforce them.
+#
+# Intended traffic matrix:
+#   - default-deny ingress for every pod in the namespace,
+#   - vLLM accepts ingress ONLY from FastAPI on 8000,
+#   - FastAPI accepts ingress on 8080 (the internal ALB path),
+#   - FastAPI may egress to DNS, vLLM:8000, and HTTPS:443 (Cognito JWKS),
+#   - vLLM may egress to DNS and HTTPS:443 (Hugging Face weight download).
+# =============================================================================
+---
+# Baseline deny: with no other policy selecting a pod, all ingress is dropped.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: llama-pilot
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+---
+# vLLM accepts inbound connections only from FastAPI pods, only on port 8000.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: vllm-allow-from-fastapi
+  namespace: llama-pilot
+spec:
+  podSelector:
+    matchLabels:
+      app: vllm
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: fastapi
+      ports:
+        - protocol: TCP
+          port: 8000
+---
+# FastAPI accepts inbound on 8080 (the container port the internal ALB targets).
+# Source is the ALB / node ENIs, so no podSelector is applied to the source.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: fastapi-ingress
+  namespace: llama-pilot
+spec:
+  podSelector:
+    matchLabels:
+      app: fastapi
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 8080
+---
+# FastAPI egress: DNS, vLLM:8000, and HTTPS:443 (Cognito JWKS retrieval).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: fastapi-egress
+  namespace: llama-pilot
+spec:
+  podSelector:
+    matchLabels:
+      app: fastapi
+  policyTypes:
+    - Egress
+  egress:
+    # DNS resolution (kube-dns) — both UDP and TCP 53.
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Inference calls to vLLM.
+    - to:
+        - podSelector:
+            matchLabels:
+              app: vllm
+      ports:
+        - protocol: TCP
+          port: 8000
+    # HTTPS egress for Cognito JWKS retrieval.
+    - ports:
+        - protocol: TCP
+          port: 443
+---
+# vLLM egress: DNS + HTTPS:443 (model/weights download from Hugging Face via NAT).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: vllm-egress
+  namespace: llama-pilot
+spec:
+  podSelector:
+    matchLabels:
+      app: vllm
+  policyTypes:
+    - Egress
+  egress:
+    # DNS resolution (kube-dns) — both UDP and TCP 53.
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # HTTPS egress for Hugging Face weight download.
+    - ports:
+        - protocol: TCP
+          port: 443
