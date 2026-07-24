@@ -1,3 +1,5 @@
+![alt text](image.png)
+
 # Self-Hosted Llama Pilot on Amazon EKS
 
 An AWS CDK (TypeScript) application that provisions a complete pilot for an
