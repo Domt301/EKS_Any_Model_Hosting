@@ -153,6 +153,14 @@ All are fixed in the code now — do not regress them:
 - **kubectl layer must match the cluster version** within ±1 minor. This repo runs a
   1.33 cluster with the **v32** layer (`@aws-cdk/lambda-layer-kubectl-v32`); the v33
   layer requires `aws-cdk-lib ^2.224`.
+- **Teardown is not a plain `cdk destroy`.** The Eks stack can land in `DELETE_FAILED`
+  if the kubectl provider loses cluster access mid-teardown, and the EKS-managed
+  `eks-cluster-sg-<cluster>` SG + `/aws/vendedlogs/states/waiter-state-machine-*`
+  log groups linger. `scripts/destroy.sh` auto-recovers (force-delete cluster →
+  `delete-stack --retain-resources` the phantom EKS custom resources → clear the SG
+  → sweep those log groups) and prints a zeroed final verification. Always tear down
+  with it, not a bare `cdk destroy`. Also: long teardowns can outlive a temporary AWS
+  session token — refresh creds if you see `ExpiredToken`.
 
 See `README.md` for the full runbook, `AGENTS.md` for the quick agent guide,
 `docs/adr/` for decisions, and `docs/VERIFICATION.md` for the verification report.
