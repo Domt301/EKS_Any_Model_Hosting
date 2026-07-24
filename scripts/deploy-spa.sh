@@ -21,10 +21,13 @@ STACK_PREFIX="LlamaPilot-${ENVIRONMENT}"
 
 echo "== publish SPA (env=${ENVIRONMENT}, region=${REGION}) =="
 
-# --- Helper: read a single stack output ----------------------------------
-out() {  # out <stack-suffix> <OutputKey>
+# --- Helper: read a single stack output -----------------------------------
+# Match by substring: outputs created inside a nested construct (e.g. Workloads)
+# are emitted with a prefixed logical id + hash (WorkloadsApiBaseUrlB23D3DDF),
+# so an exact OutputKey match misses them.
+out() {  # out <stack-suffix> <OutputKey-substring>
   aws cloudformation describe-stacks --stack-name "${STACK_PREFIX}-$1" --region "${REGION}" \
-    --query "Stacks[0].Outputs[?OutputKey=='$2'].OutputValue" --output text
+    --query "Stacks[0].Outputs[?contains(OutputKey,'$2')].OutputValue | [0]" --output text
 }
 
 APP_ID="$(out Amplify AmplifyAppId)"

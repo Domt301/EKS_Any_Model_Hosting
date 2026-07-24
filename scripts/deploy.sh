@@ -81,5 +81,5 @@ echo "== Deploy complete =="
 echo ">> App URL:  ${AMPLIFY_URL}"
 printf ">> API URL:  "
 aws cloudformation describe-stacks --stack-name "${STACK_PREFIX}-Eks" --region "${REGION}" \
-  --query "Stacks[0].Outputs[?OutputKey=='ApiBaseUrl'].OutputValue" --output text
+  --query "Stacks[0].Outputs[?contains(OutputKey,'ApiBaseUrl')].OutputValue | [0]" --output text
 echo ">> Next: scripts/create-test-user.sh you@example.com ${ENVIRONMENT}, then sign in."
