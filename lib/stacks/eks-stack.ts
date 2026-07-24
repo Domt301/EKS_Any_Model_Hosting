@@ -3,7 +3,7 @@ import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as eks from 'aws-cdk-lib/aws-eks';
 import * as ecr from 'aws-cdk-lib/aws-ecr';
 import * as iam from 'aws-cdk-lib/aws-iam';
-import { KubectlV31Layer } from '@aws-cdk/lambda-layer-kubectl-v31';
+import { KubectlV32Layer } from '@aws-cdk/lambda-layer-kubectl-v32';
 import { Construct } from 'constructs';
 import { PilotEnvironmentConfig, resourceName } from '../config/environment-config';
 import { APP_NAMESPACE, OBSERVABILITY_NAMESPACE } from '../constants';
@@ -55,7 +55,9 @@ export class EksStack extends Stack {
     this.cluster = new eks.Cluster(this, 'Cluster', {
       clusterName: resourceName(config, 'cluster'),
       version: eks.KubernetesVersion.of(config.kubernetesVersion),
-      kubectlLayer: new KubectlV31Layer(this, 'KubectlLayer'),
+      // kubectl 1.32 layer — within the supported ±1 minor skew of a 1.33 API
+      // server (using the matching v33 layer would require aws-cdk-lib ^2.224).
+      kubectlLayer: new KubectlV32Layer(this, 'KubectlLayer'),
       vpc,
       vpcSubnets: [{ subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS }],
       defaultCapacity: 0,
@@ -107,7 +109,14 @@ export class EksStack extends Stack {
       metadata: {
         name: APP_NAMESPACE,
         labels: {
-          'pod-security.kubernetes.io/enforce': 'restricted',
+          // Enforce `baseline` (not `restricted`): the vLLM/CUDA container must
+          // run as root (runAsNonRoot: false), which `restricted` forbids —
+          // admission would reject the vLLM pod and the model would never run.
+          // `baseline` still blocks privileged, host namespaces, hostPath, and
+          // dangerous capabilities. We keep warn/audit at `restricted` so the
+          // (restricted-compliant) FastAPI workload stays clean and any new
+          // over-privileged pod is surfaced.
+          'pod-security.kubernetes.io/enforce': 'baseline',
           'pod-security.kubernetes.io/warn': 'restricted',
           'pod-security.kubernetes.io/audit': 'restricted',
           'app.kubernetes.io/part-of': 'llama-pilot',
@@ -127,15 +136,11 @@ export class EksStack extends Stack {
     });
 
     // ---- Least-privilege EKS access entries ----
-    this.cluster.grantAccess(
-      'ClusterAdminAccess',
-      clusterAdminRole.roleArn,
-      [
-        eks.AccessPolicy.fromAccessPolicyName('AmazonEKSClusterAdminPolicy', {
-          accessScopeType: eks.AccessScopeType.CLUSTER,
-        }),
-      ],
-    );
+    // NOTE: `clusterAdminRole` is already granted AmazonEKSClusterAdminPolicy by
+    // being the cluster's `mastersRole` (above), which creates its access entry.
+    // Do NOT also `grantAccess(...ClusterAdminPolicy)` for the same role — that
+    // associates the identical policy twice on one AccessEntry, which
+    // CloudFormation early validation rejects (AWS::EarlyValidation::PropertyValidation).
 
     const cicdRole = new iam.Role(this, 'CicdDeployRole', {
       roleName: resourceName(config, 'cicd-deploy'),

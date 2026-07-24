@@ -45,6 +45,8 @@ export class StreamError extends Error {
 export interface StreamRequest {
   messages: ChatMessage[];
   accessToken: string;
+  /** Opaque conversation id; enables server-side in-memory context. */
+  sessionId?: string;
   temperature?: number;
   maxOutputTokens?: number;
   signal?: AbortSignal;
@@ -60,13 +62,14 @@ export async function streamChatCompletion(
   req: StreamRequest,
   callbacks: StreamCallbacks,
 ): Promise<void> {
-  const { messages, accessToken, temperature, maxOutputTokens, signal } = req;
+  const { messages, accessToken, sessionId, temperature, maxOutputTokens, signal } = req;
 
   const payload = {
     // Guard: never forward a system message even if one slipped into history.
     messages: messages
       .filter((m) => m.role === 'user' || m.role === 'assistant')
       .map((m) => ({ role: m.role, content: m.content })),
+    ...(sessionId ? { session_id: sessionId } : {}),
     temperature: temperature ?? 0.7,
     max_output_tokens: maxOutputTokens ?? 512,
     stream: true,
@@ -120,6 +123,28 @@ export async function streamChatCompletion(
 
 function isAbort(e: unknown): boolean {
   return e instanceof DOMException && e.name === 'AbortError';
+}
+
+/**
+ * Best-effort: ask the server to drop a conversation's in-memory context.
+ * Failures are ignored — memory also expires on its own (TTL).
+ */
+export async function forgetSession(sessionId: string, accessToken: string): Promise<void> {
+  try {
+    await fetch(`${config.apiBaseUrl}/api/v1/sessions/${encodeURIComponent(sessionId)}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Generate an opaque conversation id for server-side memory keying. */
+export function newSessionId(): string {
+  const c = globalThis.crypto as Crypto | undefined;
+  if (c && typeof c.randomUUID === 'function') return c.randomUUID();
+  return `s-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 async function toHttpError(res: Response): Promise<StreamError> {

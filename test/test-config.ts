@@ -9,7 +9,7 @@ export const testConfig: PilotEnvironmentConfig = {
   vpcCidr: '10.30.0.0/16',
   natGatewayCount: 1,
 
-  kubernetesVersion: '1.31',
+  kubernetesVersion: '1.33',
   cpuNodeInstanceTypes: ['m6i.large'],
   gpuNodeInstanceTypes: ['g5.xlarge'],
   cpuNodeDiskSizeGiB: 50,

@@ -1,4 +1,4 @@
-import { CfnOutput, Duration, RemovalPolicy } from 'aws-cdk-lib';
+import { CfnOutput, CfnResource, Duration, RemovalPolicy } from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as eks from 'aws-cdk-lib/aws-eks';
 import * as ecr from 'aws-cdk-lib/aws-ecr';
@@ -117,7 +117,7 @@ export class Workloads extends Construct {
       ipProtocol: 'tcp',
       fromPort: fastapi.containerPort,
       toPort: fastapi.containerPort,
-      description: 'Internal ALB -> FastAPI pods',
+      description: 'Internal ALB to FastAPI pods',
     });
 
     // Bind the FastAPI Service to the CDK-created target group via the LBC CRD.
@@ -132,16 +132,36 @@ export class Workloads extends Construct {
       },
     });
     tgb.node.addDependency(props.namespaceDependency);
+    // The TargetGroupBinding CRD (elbv2.k8s.aws) is installed by the AWS Load
+    // Balancer Controller's Helm chart. If the manifest is applied before that
+    // chart finishes, `kubectl apply` fails with "no matches for kind
+    // TargetGroupBinding" and rolls back the whole cluster stack. A node-level
+    // dependency does NOT translate to a CloudFormation DependsOn here (both go
+    // through the shared kubectl provider), so force an explicit CfnResource
+    // DependsOn from the TGB custom resource onto every ALB-controller resource.
+    if (cluster.albController) {
+      const albResources = cluster.albController.node
+        .findAll()
+        .filter((c): c is CfnResource => CfnResource.isCfnResource(c));
+      const tgbResources = tgb.node
+        .findAll()
+        .filter((c): c is CfnResource => CfnResource.isCfnResource(c));
+      for (const t of tgbResources) {
+        for (const dep of albResources) {
+          t.addDependency(dep);
+        }
+      }
+    }
 
     // ---------------------------------------------------------------------
     // Public HTTPS edge: API Gateway HTTP API + VPC Link + JWT authorizer
     // ---------------------------------------------------------------------
     const vpcLinkSg = new ec2.SecurityGroup(this, 'VpcLinkSg', {
       vpc,
-      description: 'API Gateway VPC Link -> internal ALB',
+      description: 'API Gateway VPC Link to internal ALB',
       allowAllOutbound: true,
     });
-    albSg.addIngressRule(vpcLinkSg, ec2.Port.tcp(80), 'VPC Link -> internal ALB');
+    albSg.addIngressRule(vpcLinkSg, ec2.Port.tcp(80), 'VPC Link to internal ALB');
 
     const vpcLink = new apigwv2.VpcLink(this, 'VpcLink', {
       vpcLinkName: resourceName(config, 'vpc-link'),
@@ -173,6 +193,7 @@ export class Workloads extends Construct {
         allowMethods: [
           apigwv2.CorsHttpMethod.GET,
           apigwv2.CorsHttpMethod.POST,
+          apigwv2.CorsHttpMethod.DELETE,
           apigwv2.CorsHttpMethod.OPTIONS,
         ],
         maxAge: Duration.hours(1),
@@ -184,6 +205,8 @@ export class Workloads extends Construct {
       [apigwv2.HttpMethod.POST, '/api/v1/chat/completions'],
       [apigwv2.HttpMethod.GET, '/api/v1/models'],
       [apigwv2.HttpMethod.GET, '/api/v1/me'],
+      [apigwv2.HttpMethod.GET, '/api/v1/sessions/{session_id}'],
+      [apigwv2.HttpMethod.DELETE, '/api/v1/sessions/{session_id}'],
     ] as const) {
       httpApi.addRoutes({ path, methods: [method], integration, authorizer });
     }

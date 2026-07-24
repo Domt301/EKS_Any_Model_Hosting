@@ -1,29 +1,35 @@
 import { useAuth } from './auth/useAuth';
 import { LoginScreen } from './components/LoginScreen';
 import { ChatView } from './components/ChatView';
+import { Backdrop } from './components/Backdrop';
 
 export default function App() {
   const { isAuthenticated, isLoading, user, error, login, logout, getAccessToken } = useAuth();
 
-  if (isLoading) {
-    return (
-      <div className="app-loading" role="status" aria-live="polite">
-        <span className="spinner" aria-hidden="true" />
-        <span>Loading…</span>
-      </div>
-    );
-  }
-
-  if (!isAuthenticated) {
-    return <LoginScreen onLogin={login} error={error} />;
-  }
-
   return (
-    <ChatView
-      user={user}
-      getAccessToken={getAccessToken}
-      onRequireLogin={login}
-      onLogout={logout}
-    />
+    <>
+      <Backdrop />
+      {isLoading ? (
+        <div className="app-loading" role="status" aria-live="polite">
+          <span className="orb-avatar orb-avatar--lg is-thinking" aria-hidden="true">
+            <span className="orb-avatar__core" />
+          </span>
+          <span>Initializing agent…</span>
+        </div>
+      ) : !isAuthenticated ? (
+        <div className="shell">
+          <LoginScreen onLogin={login} error={error} />
+        </div>
+      ) : (
+        <div className="shell">
+          <ChatView
+            user={user}
+            getAccessToken={getAccessToken}
+            onRequireLogin={login}
+            onLogout={logout}
+          />
+        </div>
+      )}
+    </>
   );
 }

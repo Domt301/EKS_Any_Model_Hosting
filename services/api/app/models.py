@@ -6,6 +6,7 @@ not choose the upstream model; the server forces SERVED_MODEL_NAME.
 """
 from __future__ import annotations
 
+import re
 from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
@@ -18,6 +19,8 @@ MAX_OUTPUT_TOKENS_CEILING = 512
 MIN_OUTPUT_TOKENS = 1
 MIN_TEMPERATURE = 0.0
 MAX_TEMPERATURE = 1.5
+# Opaque, client-generated conversation id used to key server-side memory.
+SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 
 # Only these roles are accepted from clients. `system` is deliberately excluded.
 ClientRole = Literal["user", "assistant"]
@@ -41,6 +44,10 @@ class ChatCompletionRequest(BaseModel):
         default=256, ge=MIN_OUTPUT_TOKENS, le=MAX_OUTPUT_TOKENS_CEILING
     )
     stream: bool = True
+    # Optional opaque conversation id. When present, the server keeps the
+    # windowed conversation in memory across turns (see app.sessions). When
+    # absent, the request is handled statelessly from `messages` alone.
+    session_id: Optional[str] = Field(default=None, max_length=128)
 
     model_config = {"extra": "forbid"}
 
@@ -53,6 +60,17 @@ class ChatCompletionRequest(BaseModel):
                 f"total message content exceeds {MAX_TOTAL_CHARS} characters"
             )
         return messages
+
+    @field_validator("session_id")
+    @classmethod
+    def _check_session_id(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        if not SESSION_ID_PATTERN.match(value):
+            raise ValueError(
+                "session_id must be 1-128 chars of [A-Za-z0-9_-]"
+            )
+        return value
 
     @model_validator(mode="after")
     def _last_message_is_user(self) -> "ChatCompletionRequest":

@@ -95,7 +95,8 @@ def test_build_payload_injects_system_and_forces_model_and_clamps(monkeypatch):
         max_output_tokens=500,
         temperature=0.5,
     )
-    payload = build_payload(req, settings, stream=True)
+    conversation = [{"role": "user", "content": "hello"}]
+    payload = build_payload(conversation, req, settings, stream=True)
     assert payload["model"] == "llama-pilot"
     assert payload["messages"][0] == {"role": "system", "content": "SYS-PROMPT-MARKER"}
     assert payload["messages"][1] == {"role": "user", "content": "hello"}

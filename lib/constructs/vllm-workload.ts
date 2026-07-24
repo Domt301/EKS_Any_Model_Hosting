@@ -41,6 +41,11 @@ export class VllmWorkload extends Construct {
           metadata: { labels },
           spec: {
             serviceAccountName: 'vllm',
+            // Disable Kubernetes' Docker-links-style service env injection. The
+            // Service named `vllm` would otherwise inject `VLLM_PORT=tcp://<ip>:8000`,
+            // which collides with vLLM's own `VLLM_PORT` integer config var and
+            // crashes the engine on startup (`int('tcp://...')`). Pods use DNS.
+            enableServiceLinks: false,
             nodeSelector: { 'workload-type': 'inference' },
             tolerations: [
               { key: 'dedicated', operator: 'Equal', value: 'inference', effect: 'NoSchedule' },
@@ -79,12 +84,23 @@ export class VllmWorkload extends Construct {
                 env: [
                   { name: 'HOME', value: '/home/vllm' },
                   { name: 'HF_HOME', value: '/models' },
-                  {
-                    name: 'HUGGING_FACE_HUB_TOKEN',
-                    valueFrom: {
-                      secretKeyRef: { name: 'huggingface-token', key: 'token', optional: true },
-                    },
-                  },
+                  // Only wire the Hugging Face token when a gated model requires
+                  // it. Ungated models (the pilot default) need no secret, so the
+                  // pilot deploys in any account with no HF credentials at all.
+                  ...(config.enableHuggingFaceTokenSecret
+                    ? [
+                        {
+                          name: 'HUGGING_FACE_HUB_TOKEN',
+                          valueFrom: {
+                            secretKeyRef: {
+                              name: 'huggingface-token',
+                              key: 'token',
+                              optional: true,
+                            },
+                          },
+                        },
+                      ]
+                    : []),
                 ],
                 resources: {
                   limits: { 'nvidia.com/gpu': '1' },

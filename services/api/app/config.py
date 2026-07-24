@@ -43,6 +43,14 @@ class Settings(BaseSettings):
     REQUEST_TIMEOUT_SECONDS: int = 120
     GENERATION_TIMEOUT_SECONDS: int = 300
 
+    # --- Conversation memory (in-memory, see app.sessions) ---
+    # Number of user+assistant turn pairs kept per session (sliding window).
+    SESSION_MAX_TURNS: int = 12
+    # Idle time before a session's memory is dropped.
+    SESSION_TTL_SECONDS: int = 1800
+    # Hard cap on concurrently-remembered sessions (LRU eviction beyond this).
+    SESSION_MAX_SESSIONS: int = 1000
+
     # --- Observability ---
     LOG_LEVEL: str = "INFO"
     LOG_PROMPTS: bool = False

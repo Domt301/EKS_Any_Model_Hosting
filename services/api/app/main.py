@@ -22,6 +22,7 @@ from .middleware import (
     rate_limited_response,
 )
 from .models import ChatCompletionRequest, ModelList, ModelObject
+from .sessions import ConversationStore
 
 logger = get_logger("app.main")
 
@@ -42,6 +43,11 @@ async def lifespan(app: FastAPI):
     app.state.http_client = client
     app.state.inference = InferenceClient(settings, client)
     app.state.limiter = InferenceLimiter(settings.MAX_CONCURRENT_INFERENCE)
+    app.state.sessions = ConversationStore(
+        max_turns=settings.SESSION_MAX_TURNS,
+        ttl_seconds=settings.SESSION_TTL_SECONDS,
+        max_sessions=settings.SESSION_MAX_SESSIONS,
+    )
     logger.info("startup complete", extra={"event": "startup"})
     try:
         yield
@@ -73,7 +79,7 @@ def create_app() -> FastAPI:
             CORSMiddleware,
             allow_origins=origins,
             allow_credentials=True,
-            allow_methods=["GET", "POST", "OPTIONS"],
+            allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
             allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
             expose_headers=["X-Request-ID"],
         )
@@ -183,17 +189,34 @@ def _register_routes(app: FastAPI) -> None:
     ) -> Response:
         limiter: InferenceLimiter = request.app.state.limiter
         inference: InferenceClient = request.app.state.inference
+        sessions: ConversationStore = request.app.state.sessions
         request_id = getattr(request.state, "request_id", None)
+
+        # Build the effective conversation. With a session_id the server keeps
+        # the windowed conversation in memory across turns; without one the
+        # request is answered statelessly from its own messages.
+        transcript = [{"role": m.role, "content": m.content} for m in body.messages]
+        if body.session_id:
+            conversation = sessions.sync(body.session_id, transcript)
+        else:
+            conversation = transcript
 
         if not limiter.try_acquire():
             return rate_limited_response(request_id)
 
         if body.stream:
             # Streaming: the limiter slot is held for the life of the generator.
+            def _remember(text: str) -> None:
+                if body.session_id:
+                    sessions.append_assistant(body.session_id, text)
+
             async def event_source():
                 try:
                     async for frame in inference.stream_chat(
-                        body, is_disconnected=request.is_disconnected
+                        body,
+                        conversation=conversation,
+                        is_disconnected=request.is_disconnected,
+                        on_complete=_remember,
                     ):
                         yield frame
                 finally:
@@ -213,10 +236,35 @@ def _register_routes(app: FastAPI) -> None:
 
         # Non-streaming: aggregate then release the slot.
         try:
-            result = await inference.complete_chat(body)
+            result = await inference.complete_chat(body, conversation=conversation)
         finally:
             limiter.release()
+        if body.session_id:
+            sessions.append_assistant(body.session_id, result.get("content", ""))
         return JSONResponse(status_code=200, content=result)
+
+    # ----- Session memory (in-memory conversation context) -----
+    @app.get("/api/v1/sessions/{session_id}", tags=["sessions"])
+    async def session_info(
+        session_id: str,
+        request: Request,
+        principal: Principal = Depends(require_auth),
+    ) -> Response:
+        sessions: ConversationStore = request.app.state.sessions
+        info = sessions.info(session_id)
+        if info is None:
+            return JSONResponse(status_code=404, content={"status": "unknown"})
+        return JSONResponse(status_code=200, content={"status": "active", **info})
+
+    @app.delete("/api/v1/sessions/{session_id}", tags=["sessions"])
+    async def session_forget(
+        session_id: str,
+        request: Request,
+        principal: Principal = Depends(require_auth),
+    ) -> Response:
+        sessions: ConversationStore = request.app.state.sessions
+        removed = sessions.forget(session_id)
+        return JSONResponse(status_code=200, content={"forgotten": removed})
 
 
 # Module-level app for `uvicorn app.main:app`.

@@ -202,7 +202,9 @@ async def test_client_disconnect_closes_upstream(make_token):
             )
             frames = []
             async for frame in inference.stream_chat(
-                req, is_disconnected=is_disconnected
+                req,
+                conversation=[{"role": "user", "content": "hi"}],
+                is_disconnected=is_disconnected,
             ):
                 frames.append(frame)
 

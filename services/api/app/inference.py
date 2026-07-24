@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from typing import Any, AsyncIterator, Dict, List, Optional, Tuple
+from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional, Tuple
 
 import httpx
 
@@ -59,17 +59,25 @@ def _sse(event: str, data: Dict[str, Any]) -> bytes:
 
 
 def build_payload(
-    req: ChatCompletionRequest, settings: Settings, *, stream: bool
+    conversation: List[Dict[str, str]],
+    req: ChatCompletionRequest,
+    settings: Settings,
+    *,
+    stream: bool,
 ) -> Dict[str, Any]:
     """Build the OpenAI-compatible upstream payload.
 
     The server injects the system prompt and forces the served model name.
-    Clients cannot set the model or a system message.
+    Clients cannot set the model or a system message. ``conversation`` is the
+    effective, already-windowed user/assistant context (from the session store
+    or, statelessly, the request's own messages).
     """
     messages: List[Dict[str, str]] = [
         {"role": "system", "content": settings.SYSTEM_PROMPT}
     ]
-    messages.extend({"role": m.role, "content": m.content} for m in req.messages)
+    messages.extend(
+        {"role": m["role"], "content": m["content"]} for m in conversation
+    )
 
     return {
         "model": settings.SERVED_MODEL_NAME,
@@ -119,18 +127,24 @@ class InferenceClient:
         self,
         req: ChatCompletionRequest,
         *,
+        conversation: List[Dict[str, str]],
         is_disconnected=None,
+        on_complete: Optional[Callable[[str], Awaitable[None] | None]] = None,
     ) -> AsyncIterator[bytes]:
         """Yield SSE frames for a streaming chat completion.
 
+        `conversation` is the effective windowed context to answer.
         `is_disconnected` is an optional awaitable-returning callable (typically
         `request.is_disconnected`) used to stop early when the client goes away.
+        `on_complete` is invoked with the full assistant text once the stream
+        finishes successfully, so the caller can persist it to session memory.
         """
-        payload = build_payload(req, self._settings, stream=True)
+        payload = build_payload(conversation, req, self._settings, stream=True)
         start = time.monotonic()
         first_token_seen = False
         prompt_tokens = 0
         completion_tokens = 0
+        assistant_parts: List[str] = []
 
         try:
             async with asyncio.timeout(self._settings.GENERATION_TIMEOUT_SECONDS):
@@ -179,7 +193,15 @@ class InferenceClient:
                                 api_time_to_first_token_seconds.observe(
                                     time.monotonic() - start
                                 )
+                            assistant_parts.append(content)
                             yield _sse("token", {"text": content})
+
+            # Persist the assistant turn to session memory (best effort) before
+            # signalling completion to the client.
+            if on_complete is not None and assistant_parts:
+                result = on_complete("".join(assistant_parts))
+                if asyncio.iscoroutine(result):
+                    await result
 
             if prompt_tokens:
                 api_prompt_tokens_total.inc(prompt_tokens)
@@ -216,12 +238,17 @@ class InferenceClient:
         finally:
             api_stream_duration_seconds.observe(time.monotonic() - start)
 
-    async def complete_chat(self, req: ChatCompletionRequest) -> Dict[str, Any]:
+    async def complete_chat(
+        self,
+        req: ChatCompletionRequest,
+        *,
+        conversation: List[Dict[str, str]],
+    ) -> Dict[str, Any]:
         """Non-streaming completion: aggregate and return a JSON result.
 
         Raises UpstreamError on failure so the route can map to an HTTP status.
         """
-        payload = build_payload(req, self._settings, stream=False)
+        payload = build_payload(conversation, req, self._settings, stream=False)
         try:
             async with asyncio.timeout(self._settings.GENERATION_TIMEOUT_SECONDS):
                 resp = await self._client.post("/v1/chat/completions", json=payload)

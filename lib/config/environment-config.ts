@@ -74,22 +74,26 @@ export function loadPilotConfig(scope: Construct): PilotEnvironmentConfig {
     vpcCidr: (raw.vpcCidr as string) ?? '10.20.0.0/16',
     natGatewayCount: numberOr(raw.natGatewayCount, 1),
 
-    kubernetesVersion: (raw.kubernetesVersion as string) ?? '1.31',
+    kubernetesVersion: (raw.kubernetesVersion as string) ?? '1.33',
     cpuNodeInstanceTypes: stringArrayOr(raw.cpuNodeInstanceTypes, ['m6i.large']),
     gpuNodeInstanceTypes: stringArrayOr(raw.gpuNodeInstanceTypes, ['g5.xlarge']),
     cpuNodeDiskSizeGiB: numberOr(raw.cpuNodeDiskSizeGiB, 50),
     gpuNodeDiskSizeGiB: numberOr(raw.gpuNodeDiskSizeGiB, 200),
     clusterPublicAccessCidrs: stringArrayOr(raw.clusterPublicAccessCidrs, []),
 
-    modelId: (raw.modelId as string) ?? 'meta-llama/Llama-3.2-3B-Instruct',
-    modelRevision: (raw.modelRevision as string) ?? 'main',
+    // Default to an *ungated* Llama mirror so the pilot deploys in any AWS
+    // account with no Hugging Face token or license click-through. Swap to a
+    // gated model + `enableHuggingFaceTokenSecret: true` when required.
+    modelId: (raw.modelId as string) ?? 'unsloth/Llama-3.2-1B-Instruct',
+    modelRevision:
+      (raw.modelRevision as string) ?? '5a8abab4a5d6f164389b1079fb721cfab8d7126c',
     servedModelName: (raw.servedModelName as string) ?? 'llama-pilot',
-    maxModelLength: numberOr(raw.maxModelLength, 4096),
+    maxModelLength: numberOr(raw.maxModelLength, 8192),
     maxOutputTokens: numberOr(raw.maxOutputTokens, 512),
     gpuMemoryUtilization: numberOr(raw.gpuMemoryUtilization, 0.85),
     vllmImage: (raw.vllmImage as string) ?? 'vllm/vllm-openai:v0.6.6',
 
-    enableHuggingFaceTokenSecret: boolOr(raw.enableHuggingFaceTokenSecret, true),
+    enableHuggingFaceTokenSecret: boolOr(raw.enableHuggingFaceTokenSecret, false),
     huggingFaceSecretName: raw.huggingFaceSecretName as string | undefined,
 
     cognitoCallbackUrls: stringArrayOr(raw.cognitoCallbackUrls, ['http://localhost:5173/']),

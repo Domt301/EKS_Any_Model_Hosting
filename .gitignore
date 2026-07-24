@@ -1,6 +1,9 @@
 # CDK / Node
 node_modules/
 cdk.out/
+# Account-specific context cache (AZ/AMI lookups) — keep out so the pilot stays
+# reproducible across any AWS account.
+cdk.context.json
 dist/
 *.js
 !jest.config.js

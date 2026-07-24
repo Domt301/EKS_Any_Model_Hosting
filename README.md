@@ -37,6 +37,11 @@ Amplify Hosting (React SPA)  ──OAuth2 Auth-Code + PKCE──►  Amazon Cogn
 - vLLM is `ClusterIP` only — no ingress, no LB, no public IP — and is reachable
   only from FastAPI (enforced by NetworkPolicy). See
   [ADR-004](docs/adr/ADR-004-vllm-private.md).
+- **Conversation context is kept in memory** (no database): FastAPI holds each
+  conversation's windowed context in a lightweight, TTL/LRU-bounded in-process
+  store keyed by an opaque `session_id` (`services/api/app/sessions.py`), and the
+  SPA sends a `session_id` per chat. Introspect/clear via
+  `GET`/`DELETE /api/v1/sessions/{id}`. A stateless path (no `session_id`) also works.
 
 ### Repository layout
 ```
@@ -72,14 +77,17 @@ Preflight helper: `scripts/deploy.sh` prints a checklist; verify GPU availabilit
 `aws ec2 describe-instance-type-offerings --location-type availability-zone --filters Name=instance-type,Values=g5.xlarge --region <region>`.
 
 ## 4. Model license & access
-- Set `modelId` + a **pinned** `modelRevision` in `cdk.json` (`context.llamaPilot`).
-- The default (`meta-llama/Llama-3.2-3B-Instruct`) is **gated** on Hugging Face:
-  accept the license with an HF account and provide a token.
-- Store the HF token in **AWS Secrets Manager** (name in `huggingFaceSecretName`),
-  never in git/CDK/outputs/images/logs. The deploy creates a Kubernetes Secret
-  `huggingface-token` from it (see `kubernetes/reference/hf-secret.example.yaml`).
-- To use an ungated model, set `enableHuggingFaceTokenSecret: false` and pick a
-  model whose license your organisation has reviewed. See §19 for substitution.
+- The default (`unsloth/Llama-3.2-1B-Instruct`, pinned by commit `modelRevision`)
+  is an **ungated** Llama mirror: no Hugging Face token, no license click-through.
+  This is what makes the pilot deploy into **any AWS account** out of the box.
+- To use a **gated** model instead (e.g. `meta-llama/Llama-3.2-3B-Instruct`):
+  1. Accept the license on Hugging Face and create a token.
+  2. Store the token in **AWS Secrets Manager** (never in git/CDK/outputs/images/logs);
+     the deploy materialises it as the `huggingface-token` Kubernetes Secret
+     (see `kubernetes/reference/hf-secret.example.yaml`).
+  3. Set `modelId` + a **pinned** `modelRevision`, `enableHuggingFaceTokenSecret: true`,
+     and `huggingFaceSecretName` in `cdk.json`. vLLM only wires the HF token env
+     when that flag is on. See §19 for substitution.
 
 ## 5. Configuration
 All environment-specific values live in **one typed object** read from CDK
@@ -90,7 +98,7 @@ context (`cdk.json` → `context.llamaPilot`), validated at synth
 | --- | --- |
 | `environmentName` | e.g. `dev`; used in resource names/tags |
 | `vpcCidr`, `natGatewayCount` | network sizing (1 NAT = pilot default) |
-| `kubernetesVersion` | EKS minor, e.g. `1.31` (matches the kubectl layer) |
+| `kubernetesVersion` | EKS minor, e.g. `1.33`. The kubectl Lambda layer must be within ±1 minor (this repo ships the `v32` layer, which covers 1.32/1.33) |
 | `cpuNodeInstanceTypes`, `gpuNodeInstanceTypes` | node sizing |
 | `modelId`, `modelRevision`, `servedModelName` | model + public alias |
 | `maxModelLength`, `maxOutputTokens`, `gpuMemoryUtilization` | inference limits |

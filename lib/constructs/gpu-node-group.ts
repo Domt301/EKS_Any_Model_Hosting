@@ -39,6 +39,14 @@ export class GpuNodeGroup extends Construct {
         'workload-type': 'inference',
         accelerator: 'nvidia',
         'model-family': 'llama',
+        // The NVIDIA device-plugin chart's default nodeAffinity requires a
+        // GPU-present feature label (normally set by Node Feature Discovery,
+        // which we don't run). Set the plugin's `nvidia.com/gpu.present=true`
+        // label directly on the node group so the daemonset schedules and
+        // advertises `nvidia.com/gpu` — otherwise vLLM stays Pending. The
+        // `nvidia.com/` prefix is allowed on managed node groups (unlike the
+        // reserved `feature.node.kubernetes.io/` / `kubernetes.io/` prefixes).
+        'nvidia.com/gpu.present': 'true',
       },
       taints: [
         {
@@ -51,6 +59,15 @@ export class GpuNodeGroup extends Construct {
         'llama-pilot:node-role': 'gpu-inference',
       },
     });
+
+    // AMI type: use the **AL2023 NVIDIA** EKS-optimized GPU AMI. Amazon Linux 2
+    // GPU AMIs (`AL2_x86_64_GPU`) are end-of-support and CloudFormation early
+    // validation rejects them on current Kubernetes versions. CDK 2.170's
+    // `NodegroupAmiType` enum predates the AL2023 GPU type and its L2 validation
+    // only allows `AL2_x86_64_GPU` for GPU instances, so we set the pinned
+    // enum above (to satisfy that check) and override the L1 property here.
+    const cfnNodegroup = this.nodeGroup.node.defaultChild as eks.CfnNodegroup;
+    cfnNodegroup.amiType = 'AL2023_x86_64_NVIDIA';
 
     // Larger root volume for model cache is expressed via diskSize above; keep a
     // typed reference for readability / future launch-template migration.

@@ -64,6 +64,10 @@ export class FastapiWorkload extends Construct {
         MAX_CONCURRENT_INFERENCE: '4',
         REQUEST_TIMEOUT_SECONDS: '120',
         GENERATION_TIMEOUT_SECONDS: '300',
+        // In-memory conversation context (see app.sessions).
+        SESSION_MAX_TURNS: '12',
+        SESSION_TTL_SECONDS: '1800',
+        SESSION_MAX_SESSIONS: '1000',
         LOG_LEVEL: 'INFO',
         LOG_PROMPTS: 'false',
         CORS_ALLOW_ORIGINS: props.corsAllowOrigin,
@@ -95,6 +99,10 @@ export class FastapiWorkload extends Construct {
           metadata: { labels },
           spec: {
             serviceAccountName: 'fastapi',
+            // Disable Docker-links-style service env injection (best practice;
+            // pods discover each other via DNS). Avoids surprise collisions like
+            // the vLLM `VLLM_PORT` one.
+            enableServiceLinks: false,
             nodeSelector: { 'workload-type': 'general' },
             terminationGracePeriodSeconds: 30,
             affinity: {

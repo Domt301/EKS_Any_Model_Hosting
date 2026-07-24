@@ -68,8 +68,11 @@ export class Observability extends Construct {
     const latency = metric('Latency', 'p95');
     const integrationLatency = metric('IntegrationLatency', 'p95');
 
+    // Guard against divide-by-zero with IF (CloudWatch metric math does not
+    // support MAX of a [TimeSeries, Scalar] array). When there are no requests
+    // the rate is 0; treatMissingData handles gaps.
     const err5xxRate = new cloudwatch.MathExpression({
-      expression: '100 * (errors / MAX([requests, 1]))',
+      expression: 'IF(requests > 0, 100 * errors / requests, 0)',
       usingMetrics: { errors: err5xx, requests: count },
       label: 'API 5xx error rate (%)',
       period: Duration.minutes(5),

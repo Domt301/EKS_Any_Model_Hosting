@@ -25,7 +25,7 @@ export function validatePilotConfig(config: PilotEnvironmentConfig): void {
 
   if (!/^1\.(2[5-9]|3\d)$/.test(config.kubernetesVersion)) {
     errors.push(
-      `kubernetesVersion "${config.kubernetesVersion}" is not a recognised EKS minor version (expected e.g. 1.29-1.31)`,
+      `kubernetesVersion "${config.kubernetesVersion}" is not a recognised EKS minor version (expected e.g. 1.29-1.33)`,
     );
   }
 
