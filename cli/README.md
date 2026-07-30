@@ -121,6 +121,37 @@ echo "explain vLLM paged attention" | llama-cli
 
 Both print a single streamed answer and exit — handy in pipelines.
 
+### Adding local files as context (`@file` / `-f`)
+
+You can pull local files into a prompt so you can ask about your code. This is
+**read-only context** — the CLI never edits files or runs commands.
+
+In the interactive REPL, reference a file inline with `@path`:
+
+```
+› what does @cli/main.go do, and how does @cli/internal/repl/repl.go call it?
+  · attached cli/main.go (4213 chars)
+  · attached cli/internal/repl/repl.go (…)
+```
+
+Paths are resolved relative to your current directory; quote paths with spaces
+(`@"src/my file.go"`). A token that doesn't resolve to a real file (e.g.
+`@someone`) is left untouched.
+
+For one-shot / scripting, attach files with `-f` (repeatable):
+
+```bash
+llama-cli -p "review this for bugs" -f services/api/app/auth.py
+llama-cli -p "compare these" -f a.go -f b.go
+```
+
+**Budget:** the backend caps a single message at ~8000 characters, so attached
+content is limited to roughly **7 KB per turn** (about 6 KB per file). Oversized
+files are truncated and larger sets are trimmed to fit — the CLI prints a
+`· truncated…` / `· skipped… (budget)` note when that happens. Combined with the
+512-token reply cap and the small default model, this is meant for focused
+questions about a file or two, not whole-repo analysis.
+
 ### Other commands
 
 ```bash
@@ -171,6 +202,7 @@ cli/
   internal/config/        credential store (~/.config/llama-pilot/credentials.json)
   internal/auth/          connection-bundle decode + Cognito token refresh
   internal/client/        HTTP + SSE streaming client for the FastAPI backend
+  internal/filectx/       @file / -f local-file context expansion (read-only)
   internal/repl/          interactive chat loop and slash commands
   Makefile                build / test / cross-compile
 ```

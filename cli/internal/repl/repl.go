@@ -18,6 +18,7 @@ import (
 	"github.com/domt301/eks_any_model_hosting/cli/internal/auth"
 	"github.com/domt301/eks_any_model_hosting/cli/internal/client"
 	"github.com/domt301/eks_any_model_hosting/cli/internal/config"
+	"github.com/domt301/eks_any_model_hosting/cli/internal/filectx"
 )
 
 // Deps are the collaborators the REPL needs. main wires these up.
@@ -30,6 +31,8 @@ type Deps struct {
 	In      io.Reader
 	Out     io.Writer
 	AppURL  string
+	// CtxOptions tunes @file / -f context expansion.
+	CtxOptions filectx.Options
 }
 
 const (
@@ -53,7 +56,8 @@ func Run(ctx context.Context, d Deps) error {
 	var history []client.Message
 
 	fmt.Fprintf(out, "Llama Pilot CLI — model %q on %s\n", d.Creds.ModelName, d.Creds.APIBaseURL)
-	fmt.Fprintln(out, "Type your message and press Enter. /help for commands, /exit to quit.")
+	fmt.Fprintln(out, "Type your message and press Enter. Reference files with @path to add them as context.")
+	fmt.Fprintln(out, "/help for commands, /exit to quit.")
 	fmt.Fprintln(out)
 
 	reader := bufio.NewReader(d.In)
@@ -90,20 +94,47 @@ func Run(ctx context.Context, d Deps) error {
 }
 
 // OneShot answers a single prompt and returns (used for `-p` / piped stdin).
-func OneShot(ctx context.Context, d Deps, prompt string) error {
-	var history []client.Message
-	return turn(ctx, d, &history, "", strings.TrimSpace(prompt))
+// files are attached as read-only context (the -f/--file flag); inline @file
+// references in the prompt are also expanded.
+func OneShot(ctx context.Context, d Deps, prompt string, files []string) error {
+	outgoing, notes := filectx.ExpandInline(strings.TrimSpace(prompt), d.CtxOptions)
+	if len(files) > 0 {
+		var n2 []string
+		outgoing, n2 = filectx.Attach(files, outgoing, d.CtxOptions)
+		notes = append(notes, n2...)
+	}
+	printNotes(d.Out, notes)
+	_, err := stream(ctx, d, "", []client.Message{{Role: "user", Content: outgoing}})
+	return err
 }
 
-// turn sends one user message and streams the assistant reply, appending both
-// to history so multi-turn context is preserved.
+// turn sends one user message and streams the assistant reply. Inline @file
+// references are expanded into the outgoing message, but only the original
+// (clean) text is kept in history — so file bytes are sent only in the turn
+// they're referenced and multi-turn history stays small.
 func turn(ctx context.Context, d Deps, history *[]client.Message, sessionID, userText string) error {
-	token, err := freshToken(ctx, d)
+	outgoing, notes := filectx.ExpandInline(userText, d.CtxOptions)
+	printNotes(d.Out, notes)
+
+	msgs := append(append([]client.Message{}, (*history)...), client.Message{Role: "user", Content: outgoing})
+	reply, err := stream(ctx, d, sessionID, msgs)
 	if err != nil {
 		return err
 	}
+	*history = append(*history,
+		client.Message{Role: "user", Content: userText},
+		client.Message{Role: "assistant", Content: reply},
+	)
+	return nil
+}
 
-	*history = append(*history, client.Message{Role: "user", Content: userText})
+// stream sends a message list and streams the assistant reply to Out, returning
+// the full reply text.
+func stream(ctx context.Context, d Deps, sessionID string, msgs []client.Message) (string, error) {
+	token, err := freshToken(ctx, d)
+	if err != nil {
+		return "", err
+	}
 
 	var b strings.Builder
 	cb := client.StreamCallbacks{
@@ -114,7 +145,7 @@ func turn(ctx context.Context, d Deps, history *[]client.Message, sessionID, use
 	}
 
 	streamErr := d.Client.StreamChat(ctx, token, client.ChatRequest{
-		Messages:        *history,
+		Messages:        msgs,
 		Temperature:     defaultTemperature,
 		MaxOutputTokens: defaultMaxOutputTokens,
 		SessionID:       sessionID,
@@ -123,17 +154,19 @@ func turn(ctx context.Context, d Deps, history *[]client.Message, sessionID, use
 	fmt.Fprintln(d.Out)
 
 	if streamErr != nil {
-		// Roll back the user turn we optimistically appended so history stays
-		// consistent with what the server saw.
-		*history = (*history)[:len(*history)-1]
 		if errors.Is(streamErr, client.ErrUnauthorized) {
-			return errors.New("session expired — run /login to paste a fresh token")
+			return "", errors.New("session expired — run /login to paste a fresh token")
 		}
-		return streamErr
+		return "", streamErr
 	}
+	return b.String(), nil
+}
 
-	*history = append(*history, client.Message{Role: "assistant", Content: b.String()})
-	return nil
+// printNotes writes context-expansion notes (attached/truncated/skipped files).
+func printNotes(out io.Writer, notes []string) {
+	for _, n := range notes {
+		fmt.Fprintf(out, "  · %s\n", n)
+	}
 }
 
 // freshToken refreshes the access token if needed and persists it.
@@ -226,6 +259,7 @@ func handleCommand(ctx context.Context, d Deps, line string, sessionID *string, 
 func printHelp(out io.Writer) {
 	fmt.Fprintln(out, "  Commands:")
 	fmt.Fprintln(out, "    /help            show this help")
+	fmt.Fprintln(out, "    @path            add a local file as read-only context (inline in your message)")
 	fmt.Fprintln(out, "    /clear, /new     start a new conversation (clears server + local memory)")
 	fmt.Fprintln(out, "    /model           show the served model")
 	fmt.Fprintln(out, "    /whoami          show your Cognito identity")

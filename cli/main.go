@@ -28,17 +28,30 @@ import (
 	"github.com/domt301/eks_any_model_hosting/cli/internal/auth"
 	"github.com/domt301/eks_any_model_hosting/cli/internal/client"
 	"github.com/domt301/eks_any_model_hosting/cli/internal/config"
+	"github.com/domt301/eks_any_model_hosting/cli/internal/filectx"
 	"github.com/domt301/eks_any_model_hosting/cli/internal/repl"
 )
 
 // version is overridable at build time: -ldflags "-X main.version=v1.2.3".
 var version = "dev"
 
+// stringsFlag collects a repeatable flag (e.g. -f a.go -f b.go).
+type stringsFlag []string
+
+func (s *stringsFlag) String() string { return strings.Join(*s, ",") }
+func (s *stringsFlag) Set(v string) error {
+	*s = append(*s, v)
+	return nil
+}
+
 func main() {
 	printPrompt := flag.String("p", "", "answer a single prompt non-interactively and exit")
 	appURL := flag.String("app-url", os.Getenv("LLAMA_PILOT_APP_URL"),
 		"URL of the Llama Pilot web app, used in the login instructions")
 	showVersion := flag.Bool("version", false, "print version and exit")
+	var files stringsFlag
+	flag.Var(&files, "f", "attach a local file as read-only context (repeatable)")
+	flag.Var(&files, "file", "attach a local file as read-only context (repeatable)")
 	flag.Parse()
 
 	if *showVersion {
@@ -49,7 +62,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	if err := run(ctx, flag.Args(), *printPrompt, *appURL); err != nil {
+	if err := run(ctx, flag.Args(), *printPrompt, *appURL, files); err != nil {
 		if errors.Is(err, context.Canceled) {
 			return
 		}
@@ -58,7 +71,7 @@ func main() {
 	}
 }
 
-func run(ctx context.Context, args []string, printPrompt, appURL string) error {
+func run(ctx context.Context, args []string, printPrompt, appURL string, files []string) error {
 	streamHTTP := &http.Client{} // no client timeout; the context controls cancellation
 	authHTTP := &http.Client{Timeout: 30 * time.Second}
 	in := os.Stdin
@@ -121,14 +134,15 @@ func run(ctx context.Context, args []string, printPrompt, appURL string) error {
 	}
 
 	deps := repl.Deps{
-		Client:  api,
-		Creds:   creds,
-		HTTP:    authHTTP,
-		Save:    config.Save,
-		Relogin: relogin,
-		In:      in,
-		Out:     out,
-		AppURL:  appURL,
+		Client:     api,
+		Creds:      creds,
+		HTTP:       authHTTP,
+		Save:       config.Save,
+		Relogin:    relogin,
+		In:         in,
+		Out:        out,
+		AppURL:     appURL,
+		CtxOptions: filectx.Options{}, // defaults; Root empty → cwd-relative paths
 	}
 
 	switch subcommand {
@@ -140,9 +154,14 @@ func run(ctx context.Context, args []string, printPrompt, appURL string) error {
 		return fmt.Errorf("unknown command %q (try: login, logout, whoami, chat)", subcommand)
 	}
 
-	// One-shot if -p is set or stdin is piped (not a terminal).
+	// One-shot when there's a prompt (from -p or piped stdin). -f attaches files
+	// to that prompt. A bare `-f` with no prompt in a terminal falls through to
+	// the interactive REPL (use @file inline there).
 	if prompt := oneShotPrompt(printPrompt, in); prompt != "" {
-		return repl.OneShot(ctx, deps, prompt)
+		return repl.OneShot(ctx, deps, prompt, files)
+	}
+	if len(files) > 0 {
+		fmt.Fprintln(out, "note: -f attaches files to a one-shot prompt (add -p \"...\"). In the REPL, reference files inline with @path.")
 	}
 
 	return repl.Run(ctx, deps)
