@@ -25,6 +25,8 @@ interface ChatViewProps {
   getAccessToken: () => Promise<string | null>;
   onRequireLogin: () => void;
   onLogout: () => void;
+  /** Navigate to the CLI-access page to mint a terminal token. */
+  onCliAccess: () => void;
 }
 
 const SUGGESTIONS = [
@@ -38,7 +40,7 @@ function newId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-export function ChatView({ user, getAccessToken, onRequireLogin, onLogout }: ChatViewProps) {
+export function ChatView({ user, getAccessToken, onRequireLogin, onLogout, onCliAccess }: ChatViewProps) {
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [input, setInput] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
@@ -217,6 +219,9 @@ export function ChatView({ user, getAccessToken, onRequireLogin, onLogout }: Cha
           )}
           <button type="button" className="btn" onClick={newChat} disabled={isEmpty && !isStreaming}>
             + New chat
+          </button>
+          <button type="button" className="btn" onClick={onCliAccess} title="Get a token for the terminal CLI">
+            CLI access
           </button>
           <button type="button" className="btn" onClick={onLogout}>
             Sign out

@@ -53,7 +53,8 @@ lib/constructs/            Cognito, GPU node group, EKS add-ons, vLLM, FastAPI, 
 lib/stacks/                network, auth, container(ECR), eks(+workloads+edge), amplify
 lib/application-stage.ts   composes all stacks
 services/api/              FastAPI application (Python) + tests + Dockerfile
-spa/                       React + TypeScript + Vite SPA (PKCE, SSE streaming)
+spa/                       React + TypeScript + Vite SPA (PKCE, SSE streaming, #cli token page)
+cli/                        llama-cli — Go terminal client (Cognito auth, streaming chat)
 kubernetes/                reference manifests (CDK is the source of truth) + network policies
 scripts/                   build / deploy / smoke / integration / test-user / destroy
 test/                      CDK assertion tests
@@ -153,6 +154,15 @@ SPA → Cognito hosted UI (Authorization Code + PKCE, no secret) → SPA exchang
 the code for tokens → SPA sends the **access** token as `Authorization: Bearer`
 → API Gateway JWT authorizer validates → FastAPI validates again (signature via
 JWKS, issuer, expiry, `token_use==access`, `client_id`).
+
+**Terminal CLI (`cli/`).** Because the Cognito app client only permits the
+Hosted-UI PKCE flow against a fixed redirect allow-list, the `llama-cli` client
+reuses the web login instead of running its own browser flow: the SPA's
+**CLI access** page (`<app-url>/#cli`) shows a copy-pasteable *connection token*
+(endpoints + access/refresh tokens) that you paste into `llama-cli login`. The
+CLI then refreshes the access token itself (same public-client `refresh_token`
+grant) and streams chat from `POST /api/v1/chat/completions`. See
+[`cli/README.md`](cli/README.md).
 
 ## 11. Model startup expectations
 First start downloads and loads weights; the vLLM pod has a long **startup
@@ -257,6 +267,9 @@ cd services/api && python -m pytest
 
 # SPA
 cd spa && npm ci && npm run build
+
+# CLI (Go)
+cd cli && make        # fmt + vet + test + build  (or: go test ./...)
 ```
 
 See [`docs/adr/`](docs/adr/) for decisions,

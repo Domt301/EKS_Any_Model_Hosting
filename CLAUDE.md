@@ -47,6 +47,8 @@ lib/application-stage.ts   composes all stacks in dependency order
 services/api/              FastAPI app (Python) + tests + Dockerfile
   app/sessions.py          lightweight in-memory conversation memory (see below)
 spa/                       React + TS + Vite SPA (PKCE, SSE streaming, futuristic UI)
+                           + #cli token page (CliAccessView) for the terminal client
+cli/                       llama-cli — Go terminal client (Cognito auth, streaming chat REPL)
 kubernetes/                reference manifests (CDK is source of truth) + network policies
 scripts/                   deploy / deploy-spa / build-api-image / smoke / integration / destroy
 test/                      CDK assertion tests (jest)
